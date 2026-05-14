@@ -48,7 +48,12 @@ class BLEManager: NSObject, ObservableObject {
     @Published var bpm: Int = 0                              // Current BPM
     @Published var avgBpm: Int = 0                           // Average BPM
     @Published var fingerOnSensor: Bool = true               // Finger detection
-    @Published var bpmHistory: [(Date, Int)] = []          // BPM over time for graphing
+    @Published var bpmHistory: [(Date, Int)] = []            // BPM over time for trending graph
+    @Published var ppgHistory: [(Date, Double)] = []         // Normalized 0-1 PPG signal for waveform
+
+    private var ppgRawBuffer: [Double] = []
+    private let ppgNormSize = 60                             // ~2.5 seconds for adaptive min/max
+    private let ppgDisplaySize = 300                         // ~12 seconds display buffer at 25Hz
 
     // =============================================================================
     // BLE UUIDs - Must match the ESP32 firmware exactly
@@ -144,6 +149,60 @@ class BLEManager: NSObject, ObservableObject {
         // .withResponse: ESP32 will acknowledge receipt (triggers callback)
         peripheral.writeValue(data, for: rxCharacteristic, type: .withResponse)
         addLog("Sent: \(message)")
+    }
+
+    private func parsePPGMessage(_ message: String) {
+        if message == "NOFINGER" {
+            DispatchQueue.main.async {
+                self.fingerOnSensor = false
+                self.bpm = 0
+                self.ppgHistory.removeAll()
+                self.ppgRawBuffer.removeAll()
+            }
+            return
+        }
+
+        guard message.hasPrefix("PPG:") else { return }
+        let payload = String(message.dropFirst(4))
+        let parts = payload.split(separator: ",")
+        guard parts.count == 2,
+              let irVal = Double(parts[0]),
+              let bpmVal = Int(parts[1]) else { return }
+
+        DispatchQueue.main.async {
+            self.fingerOnSensor = true
+            self.irValue = UInt32(irVal)
+
+            // Normalize to 0-1 over a short window, then scale into BPM units
+            self.ppgRawBuffer.append(irVal)
+            if self.ppgRawBuffer.count > self.ppgNormSize {
+                self.ppgRawBuffer.removeFirst()
+            }
+            let wMin = self.ppgRawBuffer.min() ?? irVal
+            let wMax = self.ppgRawBuffer.max() ?? irVal
+            let wRange = wMax - wMin
+            let normalized = wRange > 1000 ? (irVal - wMin) / wRange : 0.5
+            // Map normalized signal into a ±15 BPM band around current BPM
+            let bpmMid = Double(self.bpm > 20 ? self.bpm : 75)
+            let displayValue = normalized * 30.0 + (bpmMid - 15.0)
+
+            self.ppgHistory.append((Date(), displayValue))
+            if self.ppgHistory.count > self.ppgDisplaySize {
+                self.ppgHistory.removeFirst()
+            }
+
+            if bpmVal > 20 {
+                let prevBpm = self.bpm
+                self.bpm = bpmVal
+                self.avgBpm = bpmVal
+                if bpmVal != prevBpm {
+                    self.bpmHistory.append((Date(), bpmVal))
+                    if self.bpmHistory.count > 120 {
+                        self.bpmHistory.removeFirst()
+                    }
+                }
+            }
+        }
     }
 
     /**
@@ -337,50 +396,11 @@ extension BLEManager: CBPeripheralDelegate {
         if characteristic.uuid == txCharacteristicUUID,
            let data = characteristic.value,
            let message = String(data: data, encoding: .utf8) {
-            addLog("Received: \(message)")
-            
-            if message.contains("Place finger") {
-                DispatchQueue.main.async {
-                    self.fingerOnSensor = false
-                    self.bpm = 0
-                    self.avgBpm = 0
-                    self.bpmHistory.removeAll()
-                }
-            } else if message.contains("Heartbeat:") {
-                if let irRange = message.range(of: "IR\\[[0-9]+\\]", options: .regularExpression) {
-                    let irStr = message[irRange].replacingOccurrences(of: "IR[", with: "").replacingOccurrences(of: "]", with: "")
-                    DispatchQueue.main.async {
-                        self.irValue = UInt32(irStr) ?? 0
-                    }
-                }
-                if let bpmRange = message.range(of: "Heartbeat:[0-9]+", options: .regularExpression) {
-                    let bpmStr = message[bpmRange]
-                        .replacingOccurrences(of: "Heartbeat:", with: "")
-                        .replacingOccurrences(of: " BPM", with: "")
-                    DispatchQueue.main.async {
-                        self.fingerOnSensor = true
-                        self.bpm = Int(bpmStr) ?? 0
-                        self.avgBpm = Int(bpmStr) ?? 0
-                        self.bpmHistory.append((Date(), self.bpm))
-                        if self.bpmHistory.count > 120 {
-                            self.bpmHistory.removeFirst()
-                        }
-                    }
-                }
-            }
-            
-            if let redRange = message.range(of: "R\\[[0-9]+\\]", options: .regularExpression),
-               let irRange = message.range(of: "IR\\[[0-9]+\\]", options: .regularExpression),
-               let greenRange = message.range(of: "G\\[[0-9]+\\]", options: .regularExpression) {
-                let redStr = message[redRange].replacingOccurrences(of: "R[", with: "").replacingOccurrences(of: "]", with: "")
-                let irStr = message[irRange].replacingOccurrences(of: "IR[", with: "").replacingOccurrences(of: "]", with: "")
-                let greenStr = message[greenRange].replacingOccurrences(of: "G[", with: "").replacingOccurrences(of: "]", with: "")
-                
-                DispatchQueue.main.async {
-                    self.redValue = UInt32(redStr) ?? 0
-                    self.irValue = UInt32(irStr) ?? 0
-                    self.greenValue = UInt32(greenStr) ?? 0
-                }
+            // Suppress per-sample logging to avoid flooding the log at 25Hz
+            if message == "NOFINGER" || message.hasPrefix("PPG:") {
+                parsePPGMessage(message)
+            } else {
+                addLog("Received: \(message)")
             }
         }
     }

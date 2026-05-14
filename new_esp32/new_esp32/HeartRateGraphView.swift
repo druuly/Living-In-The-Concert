@@ -3,20 +3,33 @@ import Charts
 
 struct HeartRateGraphView: View {
     @ObservedObject var bleManager: BLEManager
-    
+
+    // Typed constants give the compiler unambiguous context for Color(.systemGrayX)
+    private let cardBg: Color = Color(.systemGray6)
+    private let chartBg: Color = Color(.systemBackground)
+    private let chartBorder: Color = Color(.systemGray4)
+
     var body: some View {
-        VStack(spacing: 16) {
-            if bleManager.bpmHistory.isEmpty {
-                emptyState
-            } else {
-                currentBPM
-                graph
-                stats
+        ScrollView {
+            VStack(spacing: 20) {
+                if bleManager.ppgHistory.isEmpty && bleManager.bpmHistory.isEmpty {
+                    emptyState
+                } else {
+                    currentBPM
+                    if !bleManager.ppgHistory.isEmpty {
+                        ppgWaveform
+                    } else if !bleManager.bpmHistory.isEmpty {
+                        bpmTrendGraph
+                    }
+                    stats
+                }
             }
+            .padding()
         }
-        .padding()
     }
-    
+
+    // MARK: - Subviews
+
     private var emptyState: some View {
         VStack(spacing: 12) {
             Image(systemName: "heart.fill")
@@ -29,102 +42,187 @@ struct HeartRateGraphView: View {
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(maxWidth: .infinity, minHeight: 300)
     }
-    
+
     private var currentBPM: some View {
-        VStack(spacing: 4) {
+        VStack(spacing: 6) {
             Text("\(bleManager.bpm)")
-                .font(.system(size: 72, weight: .bold, design: .rounded))
+                .font(.system(size: 80, weight: .bold, design: .rounded))
                 .foregroundColor(.red)
+                .monospacedDigit()
             Text("BPM")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+                .textCase(.uppercase)
+                .tracking(2)
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(bleManager.fingerOnSensor ? Color.green : Color.orange)
+                    .frame(width: 8, height: 8)
+                Text(bleManager.fingerOnSensor ? "Finger detected" : "Place finger on sensor")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 12)
+        .background(cardBg)
+        .cornerRadius(16)
+    }
+
+    private var ppgWaveform: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("Pulse Waveform", systemImage: "waveform.path.ecg")
                 .font(.caption)
                 .foregroundColor(.secondary)
+            ppgChart
+                .frame(height: 180)
+                .padding(12)
+                .background(chartBg)
+                .overlay(RoundedRectangle(cornerRadius: 12).stroke(chartBorder, lineWidth: 0.5))
+                .cornerRadius(12)
         }
+        .padding(16)
+        .background(cardBg)
+        .cornerRadius(16)
     }
-    
-    private var graph: some View {
-        Chart {
-            ForEach(Array(bleManager.bpmHistory.enumerated()), id: \.offset) { index, entry in
+
+    private var ppgChart: some View {
+        let history = bleManager.ppgHistory
+        return Chart {
+            ForEach(history.indices, id: \.self) { (i: Int) in
                 LineMark(
-                    x: .value("Time", entry.0),
-                    y: .value("BPM", entry.1)
+                    x: .value("Time", history[i].0),
+                    y: .value("Signal", history[i].1)
                 )
-                .foregroundStyle(.red.gradient)
+                .foregroundStyle(Color.red)
                 .interpolationMethod(.catmullRom)
             }
-            
-            if let avg = bleManager.bpmHistory.map({ $0.1 }).reduce(0, +) as Int?,
-               !bleManager.bpmHistory.isEmpty {
-                let average = Double(avg) / Double(bleManager.bpmHistory.count)
-                RuleMark(y: .value("Average", average))
-                    .foregroundStyle(.blue.opacity(0.5))
-                    .lineStyle(StrokeStyle(lineWidth: 1, dash: [5, 5]))
-            }
         }
-        .chartYScale(domain: 40...200)
-        .chartXAxis {
-            AxisMarks(values: .automatic(desiredCount: 5)) { _ in
-                AxisGridLine()
-                AxisTick()
-                AxisValueLabel(format: .dateTime.second())
-            }
-        }
+        .chartYScale(domain: ppgYDomain)
         .chartYAxis {
-            AxisMarks(values: .stride(by: 20)) { value in
+            AxisMarks(values: .automatic(desiredCount: 5)) { value in
                 AxisGridLine()
                 AxisValueLabel {
-                    if let intValue = value.as(Int.self) {
-                        Text("\(intValue)")
+                    if let v = value.as(Double.self) {
+                        Text("\(Int(v))")
+                            .font(.caption2)
                     }
                 }
             }
         }
-        .frame(height: 600)
-        .background(Color(.systemGray6))
-        .cornerRadius(12)
-    }
-    
-    private var stats: some View {
-        HStack(spacing: 24) {
-            VStack(spacing: 4) {
-                Text("Min")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                Text("\(bleManager.bpmHistory.map { $0.1 }.min() ?? 0)")
-                    .font(.title3.monospacedDigit())
-                    .foregroundColor(.blue)
-            }
-            
-            VStack(spacing: 4) {
-                Text("Avg")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                Text("\(bleManager.avgBpm)")
-                    .font(.title3.monospacedDigit())
-                    .foregroundColor(.green)
-            }
-            
-            VStack(spacing: 4) {
-                Text("Max")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                Text("\(bleManager.bpmHistory.map { $0.1 }.max() ?? 0)")
-                    .font(.title3.monospacedDigit())
-                    .foregroundColor(.red)
-            }
-            
-            VStack(spacing: 4) {
-                Text("Samples")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                Text("\(bleManager.bpmHistory.count)")
-                    .font(.title3.monospacedDigit())
+        .chartXAxis {
+            AxisMarks(values: .automatic(desiredCount: 4)) { _ in
+                AxisGridLine()
+                AxisValueLabel(format: .dateTime.second())
             }
         }
-        .padding()
-        .background(Color(.systemGray6))
-        .cornerRadius(12)
+    }
+
+    private var bpmTrendGraph: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("BPM Trend", systemImage: "chart.line.uptrend.xyaxis")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            bpmChart
+                .frame(height: 180)
+                .padding(12)
+                .background(chartBg)
+                .overlay(RoundedRectangle(cornerRadius: 12).stroke(chartBorder, lineWidth: 0.5))
+                .cornerRadius(12)
+        }
+        .padding(16)
+        .background(cardBg)
+        .cornerRadius(16)
+    }
+
+    private var bpmChart: some View {
+        let history = bleManager.bpmHistory
+        let avg = bpmAverage
+        return Chart {
+            ForEach(history.indices, id: \.self) { (i: Int) in
+                LineMark(
+                    x: .value("Time", history[i].0),
+                    y: .value("BPM", history[i].1)
+                )
+                .foregroundStyle(Color.red.gradient)
+                .interpolationMethod(.catmullRom)
+            }
+            if let avg {
+                RuleMark(y: .value("Avg", avg))
+                    .foregroundStyle(Color.blue.opacity(0.5))
+                    .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 4]))
+            }
+        }
+        .chartYScale(domain: bpmYDomain)
+        .chartXAxis {
+            AxisMarks(values: .automatic(desiredCount: 4)) { _ in
+                AxisGridLine()
+                AxisValueLabel(format: .dateTime.minute().second())
+            }
+        }
+        .chartYAxis {
+            AxisMarks(values: .stride(by: 10)) { value in
+                AxisGridLine()
+                AxisValueLabel {
+                    if let v = value.as(Int.self) {
+                        Text("\(v)").font(.caption2)
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Helpers
+
+    private var ppgYDomain: ClosedRange<Double> {
+        let bpm = Double(bleManager.bpm > 20 ? bleManager.bpm : 75)
+        return (bpm - 22)...(bpm + 22)
+    }
+
+    private var bpmAverage: Double? {
+        guard bleManager.bpmHistory.count > 1 else { return nil }
+        let sum = bleManager.bpmHistory.map { $0.1 }.reduce(0, +)
+        return Double(sum) / Double(bleManager.bpmHistory.count)
+    }
+
+    private var bpmYDomain: ClosedRange<Int> {
+        let values = bleManager.bpmHistory.map { $0.1 }
+        let lo = max(40, (values.min() ?? 60) - 10)
+        let hi = min(200, (values.max() ?? 100) + 10)
+        return lo...hi
+    }
+
+    private var stats: some View {
+        HStack(spacing: 0) {
+            statCell(label: "Min", value: "\(bleManager.bpmHistory.map { $0.1 }.min() ?? 0)", color: .blue)
+            Divider().frame(height: 40)
+            statCell(label: "Avg", value: "\(bleManager.avgBpm)", color: .green)
+            Divider().frame(height: 40)
+            statCell(label: "Max", value: "\(bleManager.bpmHistory.map { $0.1 }.max() ?? 0)", color: .red)
+            Divider().frame(height: 40)
+            statCell(label: "Samples", value: "\(bleManager.ppgHistory.count)", color: .primary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 12)
+        .background(cardBg)
+        .cornerRadius(16)
+    }
+
+    private func statCell(label: String, value: String, color: Color) -> some View {
+        VStack(spacing: 4) {
+            Text(label)
+                .font(.caption2)
+                .foregroundColor(.secondary)
+                .textCase(.uppercase)
+                .tracking(1)
+            Text(value)
+                .font(.title3.monospacedDigit())
+                .fontWeight(.semibold)
+                .foregroundColor(color)
+        }
+        .frame(maxWidth: .infinity)
     }
 }
 

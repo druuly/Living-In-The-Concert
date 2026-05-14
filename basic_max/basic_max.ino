@@ -1,17 +1,21 @@
 /**
- * MAX30105 Breakout: Output all the raw Red/IR/Green readings via BLE
- * 
+ * MAX30105 Breakout: Output raw PPG signal + BPM via BLE at ~25Hz
+ *
  * Hardware Connections (ESP32 Nano):
  * -3.3V = 3.3V
  * -GND = GND
  * -SDA = GPIO 21 (or default SDA)
  * -SCL = GPIO 22 (or default SCL)
  * -INT = Not connected
- * 
+ *
  * BLE UUIDs: Nordic UART Service (NUS) for iOS/Android compatibility
  * Service UUID: 6E400001-B5A3-F393-E0A9-E50E24DCCA9E
  * TX Characteristic: 6E400002-B5A3-F393-E0A9-E50E24DCCA9E (Notify)
  * RX Characteristic: 6E400003-B5A3-F393-E0A9-E50E24DCCA9E (Write)
+ *
+ * Message protocol:
+ *   "PPG:irValue,beatAvg"  — raw PPG value + rolling avg BPM (finger on sensor)
+ *   "NOFINGER"             — no finger detected
  */
 
 #include <BLEDevice.h>
@@ -28,7 +32,6 @@
 #define CHARACTERISTIC_TX_UUID "6E400002-B5A3-F393-E0A9-E50E24DCCA9E"
 #define CHARACTERISTIC_RX_UUID "6E400003-B5A3-F393-E0A9-E50E24DCCA9E"
 
-// BLE global objects
 BLEServer* pServer = nullptr;
 BLECharacteristic* pTxCharacteristic = nullptr;
 BLECharacteristic* pRxCharacteristic = nullptr;
@@ -46,19 +49,16 @@ long lastBeat = 0;
 float beatsPerMinute = 0;
 int beatAvg = 0;
 
-long tsLastReport = 0;
-long currentTime = 0;
-
 bool checkForBeat(long irValue)
 {
     bool beatDetected = false;
     static long lastBeatTime = 0;
     static long averageIR = 0;
     static bool aboveAverage = false;
-    
+
     averageIR = averageIR * 0.9 + irValue * 0.1;
     long delta = irValue - averageIR;
-    
+
     if (delta > 150 && !aboveAverage && (millis() - lastBeatTime) > 400) {
         aboveAverage = true;
         beatDetected = true;
@@ -66,7 +66,7 @@ bool checkForBeat(long irValue)
     } else if (delta < 50) {
         aboveAverage = false;
     }
-    
+
     return beatDetected;
 }
 
@@ -89,12 +89,12 @@ class RxCallbacks: public BLECharacteristicCallbacks {
 void setup() {
     Serial.begin(115200);
     delay(1000);
-    
+
     Wire.begin(I2C_SDA, I2C_SCL);
     Wire.setClock(100000);
-    
+
     Serial.println("MAX30105 BLE Starting...");
-    
+
     Serial.println("Scanning I2C devices...");
     for (byte addr = 1; addr < 127; addr++) {
         Wire.beginTransmission(addr);
@@ -104,7 +104,7 @@ void setup() {
             delay(50);
         }
     }
-    
+
     if (particleSensor.begin() == false) {
         Serial.println("MAX30105 was not found. Please check wiring/power.");
     } else {
@@ -156,18 +156,16 @@ void loop() {
     if (sensorAvailable) {
         long irValue = particleSensor.getIR();
 
-        if (checkForBeat(irValue) == true) {
+        if (checkForBeat(irValue)) {
             long delta = millis() - lastBeat;
             lastBeat = millis();
-
             beatsPerMinute = 60 / (delta / 1000.0);
 
             if (beatsPerMinute < 255 && beatsPerMinute > 20) {
                 rates[rateSpot++] = (byte)beatsPerMinute;
                 rateSpot %= RATE_SIZE;
-
                 beatAvg = 0;
-                for (byte x = 0 ; x < RATE_SIZE ; x++)
+                for (byte x = 0; x < RATE_SIZE; x++)
                     beatAvg += rates[x];
                 beatAvg /= RATE_SIZE;
             }
@@ -178,25 +176,19 @@ void loop() {
         Serial.print(", BPM=");
         Serial.print(beatsPerMinute);
         Serial.print(", Avg BPM=");
-        Serial.print(beatAvg);
-
-        if (irValue < 50000)
-            Serial.print(" No finger?");
-
-        Serial.println();
+        Serial.println(beatAvg);
 
         if (deviceConnected) {
             String msg;
             if (irValue < 50000) {
-                msg = "Place finger on sensor";
+                msg = "NOFINGER";
             } else {
-                msg = "IR[" + String(irValue) + "] Heartbeat:" + String(beatAvg) + " BPM";
+                msg = "PPG:" + String(irValue) + "," + String(beatAvg);
             }
-            
             pTxCharacteristic->setValue(msg.c_str());
             pTxCharacteristic->notify();
         }
     }
 
-    delay(100);
+    delay(40);  // ~25Hz — fast enough for a smooth PPG waveform
 }
