@@ -50,10 +50,13 @@ class BLEManager: NSObject, ObservableObject {
     @Published var fingerOnSensor: Bool = true               // Finger detection
     @Published var bpmHistory: [(Date, Int)] = []            // BPM over time for trending graph
     @Published var ppgHistory: [(Date, Double)] = []         // Normalized 0-1 PPG signal for waveform
+    @Published var gsrValue: Int = 0                         // Latest smoothed GSR ADC reading (0–4095)
+    @Published var gsrHistory: [(Date, Double)] = []         // GSR signal over time for graph
 
     private var ppgRawBuffer: [Double] = []
     private let ppgNormSize = 60                             // ~2.5 seconds for adaptive min/max
     private let ppgDisplaySize = 300                         // ~12 seconds display buffer at 25Hz
+    private let gsrDisplaySize = 300                         // ~12 seconds of GSR history at 25Hz
 
     // =============================================================================
     // BLE UUIDs - Must match the ESP32 firmware exactly
@@ -152,12 +155,18 @@ class BLEManager: NSObject, ObservableObject {
     }
 
     private func parsePPGMessage(_ message: String) {
-        if message == "NOFINGER" {
+        if message.hasPrefix("NOFINGER") {
+            let gsrRaw = message.hasPrefix("NOFINGER:") ? Int(message.dropFirst(9)) : nil
             DispatchQueue.main.async {
                 self.fingerOnSensor = false
                 self.bpm = 0
                 self.ppgHistory.removeAll()
                 self.ppgRawBuffer.removeAll()
+                if let gsr = gsrRaw {
+                    self.gsrValue = gsr
+                    self.gsrHistory.append((Date(), Double(gsr)))
+                    if self.gsrHistory.count > self.gsrDisplaySize { self.gsrHistory.removeFirst() }
+                }
             }
             return
         }
@@ -165,9 +174,10 @@ class BLEManager: NSObject, ObservableObject {
         guard message.hasPrefix("PPG:") else { return }
         let payload = String(message.dropFirst(4))
         let parts = payload.split(separator: ",")
-        guard parts.count == 2,
+        guard parts.count >= 2,
               let irVal = Double(parts[0]),
               let bpmVal = Int(parts[1]) else { return }
+        let gsrRaw = parts.count >= 3 ? Int(parts[2]) : nil
 
         DispatchQueue.main.async {
             self.fingerOnSensor = true
@@ -201,6 +211,12 @@ class BLEManager: NSObject, ObservableObject {
                         self.bpmHistory.removeFirst()
                     }
                 }
+            }
+
+            if let gsr = gsrRaw {
+                self.gsrValue = gsr
+                self.gsrHistory.append((Date(), Double(gsr)))
+                if self.gsrHistory.count > self.gsrDisplaySize { self.gsrHistory.removeFirst() }
             }
         }
     }
@@ -397,7 +413,7 @@ extension BLEManager: CBPeripheralDelegate {
            let data = characteristic.value,
            let message = String(data: data, encoding: .utf8) {
             // Suppress per-sample logging to avoid flooding the log at 25Hz
-            if message == "NOFINGER" || message.hasPrefix("PPG:") {
+            if message.hasPrefix("NOFINGER") || message.hasPrefix("PPG:") {
                 parsePPGMessage(message)
             } else {
                 addLog("Received: \(message)")

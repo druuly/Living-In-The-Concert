@@ -1,12 +1,20 @@
 /**
- * MAX30105 Breakout: Output raw PPG signal + BPM via BLE at ~25Hz
+ * MAX30105 + GSR: Output raw PPG signal, BPM, and skin conductance via BLE at ~25Hz
  *
  * Hardware Connections (ESP32 Nano):
+ * MAX30105:
  * -3.3V = 3.3V
  * -GND = GND
  * -SDA = GPIO 21 (or default SDA)
  * -SCL = GPIO 22 (or default SCL)
  * -INT = Not connected
+ *
+ * GSR Sensor (Godiyo analog module):
+ * -VCC = 5V
+ * -GND = GND
+ * -OUT = A6
+ * WARNING: ESP32 ADC pins are 3.3V max. Confirm your module output
+ *          stays within 3.3V under 5V supply before use.
  *
  * BLE UUIDs: Nordic UART Service (NUS) for iOS/Android compatibility
  * Service UUID: 6E400001-B5A3-F393-E0A9-E50E24DCCA9E
@@ -14,8 +22,8 @@
  * RX Characteristic: 6E400003-B5A3-F393-E0A9-E50E24DCCA9E (Write)
  *
  * Message protocol:
- *   "PPG:irValue,beatAvg"  — raw PPG value + rolling avg BPM (finger on sensor)
- *   "NOFINGER"             — no finger detected
+ *   "PPG:irValue,beatAvg,gsrValue"  — PPG + BPM + GSR (finger on MAX30105)
+ *   "NOFINGER:gsrValue"             — no finger detected, still reports GSR
  */
 
 #include <BLEDevice.h>
@@ -27,6 +35,7 @@
 
 #define I2C_SDA 21
 #define I2C_SCL 22
+#define GSR_PIN A6
 
 #define SERVICE_UUID           "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
 #define CHARACTERISTIC_TX_UUID "6E400002-B5A3-F393-E0A9-E50E24DCCA9E"
@@ -48,6 +57,8 @@ byte rateSpot = 0;
 long lastBeat = 0;
 float beatsPerMinute = 0;
 int beatAvg = 0;
+
+float gsrSmoothed = 0;
 
 bool checkForBeat(long irValue)
 {
@@ -153,6 +164,10 @@ void loop() {
         oldDeviceConnected = deviceConnected;
     }
 
+    int gsrRaw = analogRead(GSR_PIN);
+    gsrSmoothed = gsrSmoothed * 0.85 + gsrRaw * 0.15;
+    int gsrValue = (int)gsrSmoothed;
+
     if (sensorAvailable) {
         long irValue = particleSensor.getIR();
 
@@ -176,14 +191,16 @@ void loop() {
         Serial.print(", BPM=");
         Serial.print(beatsPerMinute);
         Serial.print(", Avg BPM=");
-        Serial.println(beatAvg);
+        Serial.print(beatAvg);
+        Serial.print(", GSR=");
+        Serial.println(gsrValue);
 
         if (deviceConnected) {
             String msg;
             if (irValue < 50000) {
-                msg = "NOFINGER";
+                msg = "NOFINGER:" + String(gsrValue);
             } else {
-                msg = "PPG:" + String(irValue) + "," + String(beatAvg);
+                msg = "PPG:" + String(irValue) + "," + String(beatAvg) + "," + String(gsrValue);
             }
             pTxCharacteristic->setValue(msg.c_str());
             pTxCharacteristic->notify();

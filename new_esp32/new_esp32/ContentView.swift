@@ -36,12 +36,18 @@ struct ContentView: View {
                     Label("Terminal", systemImage: "terminal")
                 }
                 .tag(0)
-            
+
             HeartRateGraphView(bleManager: bleManager)
                 .tabItem {
                     Label("Heart Rate", systemImage: "heart.fill")
                 }
                 .tag(1)
+
+            GSRGraphView(bleManager: bleManager)
+                .tabItem {
+                    Label("GSR", systemImage: "waveform.path")
+                }
+                .tag(2)
         }
     }
     
@@ -158,10 +164,10 @@ struct ContentView: View {
     
     private var sensorReadings: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("MAX30102 Readings")
+            Text("Sensor Readings")
                 .font(.headline)
                 .padding(.horizontal)
-            
+
             HStack {
                 VStack {
                     Text("IR")
@@ -170,7 +176,7 @@ struct ContentView: View {
                         .font(.system(.title3, design: .monospaced))
                 }
                 .frame(maxWidth: .infinity)
-                
+
                 VStack {
                     Text("BPM")
                         .font(.caption)
@@ -178,7 +184,7 @@ struct ContentView: View {
                         .font(.system(.title3, design: .monospaced))
                 }
                 .frame(maxWidth: .infinity)
-                
+
                 VStack {
                     Text("Avg BPM")
                         .font(.caption)
@@ -186,9 +192,17 @@ struct ContentView: View {
                         .font(.system(.title3, design: .monospaced))
                 }
                 .frame(maxWidth: .infinity)
+
+                VStack {
+                    Text("GSR")
+                        .font(.caption)
+                    Text("\(bleManager.gsrValue)")
+                        .font(.system(.title3, design: .monospaced))
+                }
+                .frame(maxWidth: .infinity)
             }
             .padding()
-            
+
             HStack {
                 Circle()
                     .fill(bleManager.fingerOnSensor ? Color.green : Color.red)
