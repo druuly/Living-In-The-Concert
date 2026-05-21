@@ -48,6 +48,12 @@ struct ContentView: View {
                     Label("GSR", systemImage: "waveform.path")
                 }
                 .tag(2)
+
+            ConcertView(bleManager: bleManager)
+                .tabItem {
+                    Label("Concert", systemImage: "music.note.house.fill")
+                }
+                .tag(3)
         }
     }
     
