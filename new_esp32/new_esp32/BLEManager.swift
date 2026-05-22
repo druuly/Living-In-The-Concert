@@ -58,6 +58,16 @@ class BLEManager: NSObject, ObservableObject {
     private let ppgDisplaySize = 300                         // ~12 seconds display buffer at 25Hz
     private let gsrDisplaySize = 300                         // ~12 seconds of GSR history at 25Hz
 
+    // BPM smoothing: median over a short window to suppress ESP32 noise spikes
+    private var bpmSmoothingBuffer: [Int] = []
+    private let bpmSmoothingSize = 6
+    // Running session samples for true average
+    private var bpmSessionSamples: [Int] = []
+
+    // GSR smoothing: rolling median to reduce ADC quantization noise
+    private var gsrSmoothingBuffer: [Double] = []
+    private let gsrSmoothingSize = 8
+
     // =============================================================================
     // BLE UUIDs - Must match the ESP32 firmware exactly
     // Nordic UART Service (NUS) provides serial-like communication over BLE
@@ -162,6 +172,8 @@ class BLEManager: NSObject, ObservableObject {
                 self.bpm = 0
                 self.ppgHistory.removeAll()
                 self.ppgRawBuffer.removeAll()
+                self.bpmSmoothingBuffer.removeAll()
+                self.gsrSmoothingBuffer.removeAll()
                 if let gsr = gsrRaw {
                     self.gsrValue = gsr
                     self.gsrHistory.append((Date(), Double(gsr)))
@@ -201,12 +213,25 @@ class BLEManager: NSObject, ObservableObject {
                 self.ppgHistory.removeFirst()
             }
 
-            if bpmVal > 20 {
+            if bpmVal > 20 && bpmVal < 220 {
+                // Outlier rejection: ignore readings that jump > 30 BPM from current smoothed value
+                let currentSmoothed = self.bpm
+                guard currentSmoothed == 0 || abs(bpmVal - currentSmoothed) <= 30 else { return }
+
+                self.bpmSmoothingBuffer.append(bpmVal)
+                if self.bpmSmoothingBuffer.count > self.bpmSmoothingSize {
+                    self.bpmSmoothingBuffer.removeFirst()
+                }
+                let sorted = self.bpmSmoothingBuffer.sorted()
+                let smoothed = sorted[sorted.count / 2]  // median
+
+                self.bpmSessionSamples.append(smoothed)
+                self.avgBpm = self.bpmSessionSamples.reduce(0, +) / self.bpmSessionSamples.count
+
                 let prevBpm = self.bpm
-                self.bpm = bpmVal
-                self.avgBpm = bpmVal
-                if bpmVal != prevBpm {
-                    self.bpmHistory.append((Date(), bpmVal))
+                self.bpm = smoothed
+                if smoothed != prevBpm {
+                    self.bpmHistory.append((Date(), smoothed))
                     if self.bpmHistory.count > 120 {
                         self.bpmHistory.removeFirst()
                     }
@@ -214,8 +239,14 @@ class BLEManager: NSObject, ObservableObject {
             }
 
             if let gsr = gsrRaw {
-                self.gsrValue = gsr
-                self.gsrHistory.append((Date(), Double(gsr)))
+                self.gsrSmoothingBuffer.append(Double(gsr))
+                if self.gsrSmoothingBuffer.count > self.gsrSmoothingSize {
+                    self.gsrSmoothingBuffer.removeFirst()
+                }
+                let sortedGSR = self.gsrSmoothingBuffer.sorted()
+                let smoothedGSR = sortedGSR[sortedGSR.count / 2]
+                self.gsrValue = Int(smoothedGSR)
+                self.gsrHistory.append((Date(), smoothedGSR))
                 if self.gsrHistory.count > self.gsrDisplaySize { self.gsrHistory.removeFirst() }
             }
         }
@@ -316,10 +347,12 @@ extension BLEManager: CBCentralManagerDelegate {
      */
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
         state = .disconnected
-        // Clear all references to disconnected device's services/characteristics
         uartService = nil
         txCharacteristic = nil
         rxCharacteristic = nil
+        bpmSmoothingBuffer.removeAll()
+        bpmSessionSamples.removeAll()
+        gsrSmoothingBuffer.removeAll()
         addLog("Disconnected")
     }
 }

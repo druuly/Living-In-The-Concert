@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ConcertView: View {
     @ObservedObject var bleManager: BLEManager
+    @ObservedObject var sessionStore: SessionStore
 
     enum FlowState {
         case intro
@@ -11,6 +12,7 @@ struct ConcertView: View {
     }
 
     @State private var flow: FlowState = .intro
+    @State private var savedBaseline: BaselineResult? = BaselineResult.load()
 
     var body: some View {
         switch flow {
@@ -18,10 +20,13 @@ struct ConcertView: View {
             introView
         case .baseline:
             BaselineView(bleManager: bleManager) { result in
+                result.save()
+                savedBaseline = result
                 flow = .recording(result)
             }
         case .recording(let baseline):
             ConcertRecordingView(bleManager: bleManager, baseline: baseline) { url, peaks in
+                sessionStore.save(tempVideoURL: url, peaks: peaks, baseline: baseline)
                 flow = .review(url, peaks)
             }
         case .review(let url, let peaks):
@@ -60,6 +65,10 @@ struct ConcertView: View {
                 .cornerRadius(12)
                 .padding(.horizontal)
 
+                if let saved = savedBaseline {
+                    savedBaselineCard(saved)
+                }
+
                 if bleManager.state != .connected {
                     Label("Connect your sensor first", systemImage: "exclamationmark.triangle.fill")
                         .foregroundColor(.orange)
@@ -67,7 +76,7 @@ struct ConcertView: View {
                 }
 
                 Button(action: { flow = .baseline }) {
-                    Text("Begin Baseline Calibration")
+                    Text("New Baseline Calibration")
                         .font(.headline)
                         .frame(maxWidth: .infinity)
                         .padding()
@@ -80,5 +89,54 @@ struct ConcertView: View {
             }
             .padding(.vertical, 36)
         }
+    }
+
+    private func savedBaselineCard(_ baseline: BaselineResult) -> some View {
+        VStack(spacing: 12) {
+            HStack {
+                Image(systemName: "checkmark.seal.fill")
+                    .foregroundColor(.green)
+                Text("Saved Baseline")
+                    .font(.headline)
+                Spacer()
+                Text(baseline.savedAt, style: .date)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            HStack(spacing: 32) {
+                VStack(spacing: 2) {
+                    Text("Resting HR")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Text("\(Int(baseline.avgHR)) BPM")
+                        .font(.title3.monospacedDigit())
+                        .fontWeight(.semibold)
+                }
+                VStack(spacing: 2) {
+                    Text("Resting GSR")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Text("\(Int(baseline.avgGSR))")
+                        .font(.title3.monospacedDigit())
+                        .fontWeight(.semibold)
+                }
+            }
+
+            Button(action: { flow = .recording(baseline) }) {
+                Label("Use Saved Baseline", systemImage: "play.fill")
+                    .font(.subheadline.weight(.semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+                    .background(bleManager.state == .connected ? Color.green : Color.gray)
+                    .foregroundColor(.white)
+                    .cornerRadius(10)
+            }
+            .disabled(bleManager.state != .connected)
+        }
+        .padding()
+        .background(Color(.systemGray6))
+        .cornerRadius(14)
+        .padding(.horizontal)
     }
 }

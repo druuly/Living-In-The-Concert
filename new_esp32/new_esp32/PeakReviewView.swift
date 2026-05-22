@@ -7,7 +7,8 @@ struct PeakReviewView: View {
     let onDone: () -> Void
 
     @State private var player: AVPlayer
-    @State private var savedConfirmation = false
+    @State private var shareItems: [Any] = []
+    @State private var showingShareSheet = false
 
     init(videoURL: URL, peaks: [PeakMoment], onDone: @escaping () -> Void) {
         self.videoURL = videoURL
@@ -50,13 +51,6 @@ struct PeakReviewView: View {
                         }
                     }
                 }
-
-                if savedConfirmation {
-                    Label("Peaks saved to Files", systemImage: "checkmark.circle.fill")
-                        .foregroundColor(.green)
-                        .font(.subheadline)
-                        .padding(.vertical, 8)
-                }
             }
             .navigationTitle("Concert Review")
             .navigationBarTitleDisplayMode(.inline)
@@ -65,12 +59,22 @@ struct PeakReviewView: View {
                     Button("Done") { onDone() }
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button(action: savePeaksJSON) {
-                        Label("Save Log", systemImage: "square.and.arrow.down")
+                    Menu {
+                        Button(action: shareVideo) {
+                            Label("Share Video", systemImage: "film")
+                        }
+                        Button(action: sharePeaksJSON) {
+                            Label("Export Peaks JSON", systemImage: "doc.badge.arrow.up")
+                        }
+                    } label: {
+                        Image(systemName: "square.and.arrow.up")
                     }
                 }
             }
             .onAppear { player.play() }
+            .sheet(isPresented: $showingShareSheet) {
+                ActivityView(items: shareItems)
+            }
         }
     }
 
@@ -85,12 +89,28 @@ struct PeakReviewView: View {
         return String(format: "%d:%02d", m, s)
     }
 
-    private func savePeaksJSON() {
-        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        let filename = "peaks_\(Int(Date().timeIntervalSince1970)).json"
-        let url = docs.appendingPathComponent(filename)
-        guard let data = try? JSONEncoder().encode(peaks) else { return }
-        try? data.write(to: url)
-        savedConfirmation = true
+    private func shareVideo() {
+        shareItems = [videoURL]
+        showingShareSheet = true
     }
+
+    private func sharePeaksJSON() {
+        guard let data = try? JSONEncoder().encode(peaks) else { return }
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("peaks_\(Int(Date().timeIntervalSince1970)).json")
+        try? data.write(to: tmp)
+        shareItems = [tmp]
+        showingShareSheet = true
+    }
+}
+
+// UIActivityViewController wrapper
+struct ActivityView: UIViewControllerRepresentable {
+    let items: [Any]
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: items, applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ uvc: UIActivityViewController, context: Context) {}
 }

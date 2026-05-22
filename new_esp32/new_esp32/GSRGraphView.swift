@@ -7,6 +7,7 @@ struct GSRGraphView: View {
     private let cardBg: Color = Color(.systemGray6)
     private let chartBg: Color = Color(.systemBackground)
     private let chartBorder: Color = Color(.systemGray4)
+    private let savedBaseline: BaselineResult? = BaselineResult.load()
 
     var body: some View {
         ScrollView {
@@ -50,6 +51,24 @@ struct GSRGraphView: View {
                 .foregroundColor(.secondary)
                 .textCase(.uppercase)
                 .tracking(2)
+
+            HStack(spacing: 16) {
+                // Trend indicator
+                let trend = gsrTrend
+                Label(trend.label, systemImage: trend.symbol)
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(trend.color)
+
+                // Baseline-relative delta if a saved baseline exists
+                if let baseline = savedBaseline, baseline.avgGSR > 0 {
+                    let delta = (Double(bleManager.gsrValue) - baseline.avgGSR) / baseline.avgGSR * 100
+                    let sign = delta >= 0 ? "+" : ""
+                    Text("\(sign)\(Int(delta))% vs rest")
+                        .font(.caption)
+                        .foregroundColor(delta > 20 ? .red : (delta < -20 ? .blue : .secondary))
+                }
+            }
+
             Text(gsrLabel)
                 .font(.caption)
                 .foregroundColor(.secondary)
@@ -146,6 +165,30 @@ struct GSRGraphView: View {
         let lo = max(0, (values.min() ?? 0) - 50)
         let hi = min(4095, (values.max() ?? 4095) + 50)
         return lo...hi
+    }
+
+    private struct TrendInfo {
+        let label: String
+        let symbol: String
+        let color: Color
+    }
+
+    private var gsrTrend: TrendInfo {
+        let history = bleManager.gsrHistory
+        guard history.count >= 20 else {
+            return TrendInfo(label: "Collecting…", symbol: "minus", color: .secondary)
+        }
+        let recent = history.suffix(10).map { $0.1 }
+        let earlier = history.dropLast(10).suffix(10).map { $0.1 }
+        let recentAvg = recent.reduce(0, +) / Double(recent.count)
+        let earlierAvg = earlier.reduce(0, +) / Double(earlier.count)
+        let delta = recentAvg - earlierAvg
+        if delta > 40 {
+            return TrendInfo(label: "Rising", symbol: "arrow.up", color: .red)
+        } else if delta < -40 {
+            return TrendInfo(label: "Falling", symbol: "arrow.down", color: .blue)
+        }
+        return TrendInfo(label: "Stable", symbol: "minus", color: .secondary)
     }
 
     // Rough qualitative label based on ADC range (calibrate to your module)

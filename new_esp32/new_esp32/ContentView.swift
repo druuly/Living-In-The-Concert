@@ -26,6 +26,7 @@ import CoreBluetooth
 /// - Connected: Shows Disconnect button, message log, input field
 struct ContentView: View {
     @StateObject private var bleManager = BLEManager()
+    @StateObject private var sessionStore = SessionStore()
     @State private var inputText = ""
     @State private var selectedTab = 0
 
@@ -49,11 +50,17 @@ struct ContentView: View {
                 }
                 .tag(2)
 
-            ConcertView(bleManager: bleManager)
+            ConcertView(bleManager: bleManager, sessionStore: sessionStore)
                 .tabItem {
                     Label("Concert", systemImage: "music.note.house.fill")
                 }
                 .tag(3)
+
+            SessionLibraryView(store: sessionStore)
+                .tabItem {
+                    Label("Library", systemImage: "film.stack")
+                }
+                .tag(4)
         }
     }
     
